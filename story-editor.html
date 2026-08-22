@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: file:; style-src 'self' 'unsafe-inline'; script-src 'self';">
+  <title>小故事编辑器</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="editor-body">
+  <div class="editor-wrap">
+    <div class="editor-topbar">
+      <div>
+        <h1 id="modeTitle">撰写新故事</h1>
+        <div id="charInfo" class="editor-char"></div>
+      </div>
+      <div class="editor-actions">
+        <button id="btnTogglePreview" class="btn btn-secondary" title="Markdown 实时预览">预览</button>
+        <button id="btnClose" class="btn btn-secondary">关闭</button>
+        <button id="btnDelete" class="btn btn-danger hidden">删除</button>
+        <button id="btnSave" class="btn btn-primary">保存</button>
+      </div>
+    </div>
+
+    <div id="err" class="editor-error hidden">未获取到编辑数据，请从主窗口打开编辑器。</div>
+
+    <div id="editorMain">
+      <input id="f_title" class="editor-title" placeholder="故事标题（必填）">
+      <input id="f_tags" class="editor-tags" placeholder="标签，逗号分隔，如 #主线, #回忆">
+      <div id="participantSection" class="hidden">
+        <label class="editor-label" id="participantLabel">参与角色（可多选，标注哪些角色参与本故事）</label>
+        <input id="f_participant_search" class="editor-tags" placeholder="搜索角色，点击下方选项添加参与角色…">
+        <div id="participantOptions" class="participant-options"></div>
+        <div id="participantChips" class="chips"></div>
+      </div>
+      <textarea id="f_content" class="editor-content" placeholder="在这里撰写故事正文…（支持 Markdown 语法：**加粗**、# 标题、- 列表等）"></textarea>
+      <div id="preview" class="editor-preview md-body hidden"></div>
+      <div class="editor-footer">支持 Markdown 渲染 · 独立故事保存后可在角色档案中查看参与情况</div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="markdown.js"></script>
+  <script src="story-editor.js"></script>
+</body>
+</html>

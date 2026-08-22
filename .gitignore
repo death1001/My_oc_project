@@ -1,0 +1,14 @@
+# 忽略日志文件
+*.log
+*.pid
+
+# 忽略临时文件
+*.tmp
+*~
+
+# 忽略 Node.js 项目常见的依赖包目录（如果你以后用 npm 安装东西）
+node_modules/
+
+# 忽略所有系统自动生成的文件
+.DS_Store
+Thumbs.db
