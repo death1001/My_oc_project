@@ -5,6 +5,7 @@
 并为角色撰写可排序的小故事；另提供「独立故事库」用于跨角色的群像叙事。
 
 完全离线运行，数据只存在本地 `data/characters.db` 与 `images/` 目录，不依赖任何网络服务。
+这两个目录**不进 Git** —— 仓库里只有程序，你的角色设定与立绘永远留在本机。
 
 ---
 
@@ -81,10 +82,15 @@ npm run check    # 语法自检（8 个 JS 文件）
 ├── story-editor.html     # 故事编辑器窗口
 ├── story-editor.js       # 故事编辑器逻辑
 ├── docs/                 # 工程文档（按工作区块分类）
-├── images/               # 角色图片 char_{id}/avatar.* + portrait.*
-├── data/                 # SQLite 数据库 characters.db
+├── images/               # 角色图片 char_{id}/avatar.* + portrait.*（不进 Git）
+├── data/                 # SQLite 数据库 characters.db（不进 Git）
 └── node_modules/
 ```
+
+> `data/` 与 `images/` 是**个人内容**，被 `.gitignore` 排除：仓库里只有程序，没有你的角色。
+> 新机器 clone 后首次启动会自动建出这两个目录和一张空表，缺它们不是故障。
+> 想在机器之间搬数据，走「导出 / 导入」JSON，别用 Git 传数据库。详见
+> [构建与运维 / 仓库卫生](docs/09-构建与运维/01-启动脚本与自检.md#7-仓库卫生)。
 
 文件行数、内部函数索引见 [进程架构与代码地图](docs/00-总览/02-进程架构与代码地图.md)。
 

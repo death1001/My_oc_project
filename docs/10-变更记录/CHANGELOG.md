@@ -5,6 +5,39 @@
 
 ---
 
+## D2 — 仓库发布与历史清理（2026-10-29，配置 + 文档）
+
+**目标**：把程序上传到 GitHub（`death1001/oc--`，public），但**只上传程序**，
+个人角色数据与立绘必须留在本机。
+
+**做了什么**
+
+| 项 | 内容 |
+| --- | --- |
+| `.gitignore` | 新增 `data/`、`images/`、`.workbuddy/`、`.tmp_prebuild/`、`.vscode/`、`.idea/`、`desktop.ini`；保留原有日志 / 临时文件规则 |
+| 停止跟踪 | `git rm -r --cached data images` —— 工作区文件不动，只从索引移除 |
+| 历史清理 | `filter-branch --index-filter` 重写全部 2 个提交，把 `data/` `images/` 从每个提交里擦掉；`--force-with-lease=main:<旧SHA>` 强推；清掉 `refs/original` + reflog + `gc --prune=now` |
+| 文档 | `docs/09-构建与运维/01` §7 整节重写为「什么进 Git / .gitignore 全文 / 新机器 clone / 历史清理命令与局限」；`README.md` 两处补充「数据目录不进 Git」 |
+
+**为什么"停止跟踪"不够**
+
+首次提交（2026-08-22）里 `data/characters.db`（237KB）与 4 张立绘（2.5MB）已经在树里。
+只提交一次删除，旧提交仍然翻得到 —— 公开仓库里等于永久可查。必须重写历史。
+
+**结果**
+
+- 远端 `main` = `ff6d9be` → `bee29ed`（`Initial commit`），共 37 个文件，无 `data/` `images/`；
+- 本地对象库中 `git rev-list --objects --all | grep data/` 为空，旧提交 `cat-file -t` 已查不到。
+
+**强推也挡不住的那部分**（重要）
+
+GitHub 的服务端悬空对象不会立刻回收：`api.github.com/repos/death1001/oc--/commits/1c3a076…`
+仍然返回 200。也就是说**能挡住"翻提交历史"，挡不住"拿着旧 SHA 直接访问"**。
+要彻底清除只能等 GitHub GC、联系 Support 请求删除，或删库重建。
+教训写进 `09-01 §7.4`：`.gitignore` 必须在**第一次提交之前**写好。
+
+---
+
 ## v2.0.2 — 立绘铺满画框，消除上下留白（2026-10-29）
 
 **目标**：用户反馈详情页的角色卡「立绘没有自动填充空白处」——画框上下各有一条空白。
