@@ -4,261 +4,375 @@
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'self' 'unsafe-inline'; script-src 'self';">
   <title>角色资料查询器</title>
+  <!-- 主题预加载：必须在样式表前执行，避免首屏闪色 -->
+  <script src="theme-init.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- ================= 顶部工具栏 ================= -->
-  <header class="toolbar">
-    <div class="brand">🗂 角色资料查询器</div>
-    <input id="searchInput" class="search" type="text" placeholder="搜索姓名 / 别名…">
-    <select id="filterAffiliation" class="filter" title="阵营筛选"><option value="">全部阵营</option></select>
-    <select id="filterRace" class="filter" title="种族筛选"><option value="">全部种族</option></select>
-    <select id="filterTag" class="filter" title="标签筛选"><option value="">全部标签</option></select>
-    <div class="toolbar-spacer"></div>
-    <button id="btnNewGlobalStory" class="btn btn-secondary" title="撰写不关联单个角色的独立故事，可自由添加参与角色">✍️ 写故事</button>
-    <button id="btnExport" class="btn btn-secondary" title="导出全部角色数据为 JSON">导出</button>
-    <button id="btnImport" class="btn btn-secondary" title="从 JSON 导入角色数据">导入</button>
-    <button id="btnNew" class="btn btn-primary">＋ 新建角色</button>
-  </header>
+  <!-- 氛围层：三团高斯光斑，只做 transform 漂移，交给合成器 -->
+  <div class="bg-bloom" aria-hidden="true"><i></i><i></i><i></i></div>
 
-  <!-- ================= 主布局 ================= -->
-  <main class="layout">
-    <!-- 左侧：角色 / 故事 双视图 -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <div class="side-tabs">
-          <button class="side-tab active" data-view="chars" title="角色列表">👤 角色</button>
-          <button class="side-tab" data-view="stories" title="独立故事库">📚 故事</button>
-        </div>
-        <span id="charCount" class="count-badge">0</span>
-      </div>
-      <!-- 角色视图 -->
-      <div id="charsView">
-        <div id="charList" class="char-list"></div>
-        <div id="charListEmpty" class="empty-state hidden">暂无角色，点击右上角「新建角色」开始建档</div>
-      </div>
-      <!-- 故事视图 -->
-      <div id="storiesView" class="hidden">
-        <div class="story-list-header">
-          <span>独立故事库</span>
-          <button id="btnNewGlobalStory2" class="btn btn-small btn-primary" title="撰写独立故事">＋ 写故事</button>
-        </div>
-        <div id="globalStoryList" class="char-list"></div>
-        <div id="globalStoryEmpty" class="empty-state hidden">暂无独立故事，点击「写故事」开始创作</div>
-      </div>
-    </aside>
+  <!-- 图标精灵：全站图标唯一来源，用 <svg class="ico"><use href="#i-x"/></svg> 引用 -->
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-brand" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="4"/><path d="M7.5 9.5h9M7.5 13h9M7.5 16.5h5.5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.6 4.6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.2v13.6M5.2 12h13.6"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L18.2 9.8a2.8 2.8 0 0 0-4-4L4 16v4z"/><path d="M13.4 7.2l3.4 3.4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V4.8h5V7M6.2 7l.9 12.2h9.8L17.8 7"/><path d="M10.3 10.8v5.2M13.7 10.8v5.2"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 4v10.5M7.8 10.4L12 14.6l4.2-4.2"/><path d="M4.5 18.5h15"/></symbol>
+    <symbol id="i-import" viewBox="0 0 24 24"><path d="M12 14.6V4M7.8 8.2L12 4l4.2 4.2"/><path d="M4.5 18.5h15"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3.4v2.2M12 18.4v2.2M4.4 7.7l1.9 1.1M17.7 15.2l1.9 1.1M4.4 16.3l1.9-1.1M17.7 8.8l1.9-1.1"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 5.5A2 2 0 0 1 7 3.5h11.5V17H7.4A2.4 2.4 0 0 0 5 19.4z"/><path d="M5 19.4a2.4 2.4 0 0 1 2.4-2.4h11.1v3.5H7.4"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8.4" r="3.6"/><path d="M5.2 20c0-3.7 3-6.2 6.8-6.2s6.8 2.5 6.8 6.2"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.4 6.4l11.2 11.2M17.6 6.4L6.4 17.6"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5.5M6.8 10.7L12 5.5l5.2 5.2"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v13.5M6.8 13.3L12 18.5l5.2-5.2"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.6l4.6 4.4L19 6.8"/></symbol>
+    <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4.2 11.2A8 8 0 1 1 6.6 17"/><path d="M4 5v6.4h6.2"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="3"/><circle cx="9" cy="10" r="1.5"/><path d="M4.6 17.2l4.6-4 3.4 2.9 3-2.4 4 3.5"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3.6l8 4.2-8 4.2-8-4.2z"/><path d="M4 12.4l8 4.2 8-4.2"/><path d="M4 16.6l8 4.2 8-4.2"/></symbol>
+  </svg>
 
-    <!-- 右侧详情 -->
-    <section class="detail" id="detail">
-      <div id="detailEmpty" class="detail-empty">← 从左侧列表选择一个角色查看档案</div>
+  <div class="app-shell">
+    <!-- ================= 顶部工具栏 ================= -->
+    <header class="toolbar">
+      <div class="brand">
+        <span class="brand-mark"><svg class="ico"><use href="#i-brand"/></svg></span>
+        <span class="brand-text">角色资料查询器</span>
+      </div>
 
-      <div id="detailContent" class="hidden">
-        <!-- 主视觉区：立绘 + 快速印象 -->
-        <div class="hero">
-          <div class="portrait-frame">
-            <img id="portraitImg" alt="立绘" class="portrait-img hidden">
-            <div id="portraitFallback" class="portrait-fallback hidden"></div>
+      <div class="search-field">
+        <svg class="ico search-ico"><use href="#i-search"/></svg>
+        <input id="searchInput" class="search" type="text" placeholder="搜索姓名 / 别名…" aria-label="搜索姓名或别名">
+      </div>
+
+      <select id="filterAffiliation" class="filter" title="按阵营筛选" aria-label="阵营筛选"><option value="">全部阵营</option></select>
+      <select id="filterRace" class="filter" title="按种族筛选" aria-label="种族筛选"><option value="">全部种族</option></select>
+      <select id="filterTag" class="filter" title="按标签筛选" aria-label="标签筛选"><option value="">全部标签</option></select>
+
+      <div class="toolbar-spacer"></div>
+
+      <button id="btnNewGlobalStory" class="btn btn-ghost" title="撰写不关联单个角色的独立故事，可自由添加参与角色">
+        <svg class="ico"><use href="#i-book"/></svg><span class="btn-text">写故事</span>
+      </button>
+      <button id="btnExport" class="btn btn-ghost" title="导出全部角色数据为 JSON">
+        <svg class="ico"><use href="#i-export"/></svg><span class="btn-text">导出</span>
+      </button>
+      <button id="btnImport" class="btn btn-ghost" title="从 JSON 导入角色数据">
+        <svg class="ico"><use href="#i-import"/></svg><span class="btn-text">导入</span>
+      </button>
+      <button id="btnNew" class="btn btn-primary">
+        <svg class="ico"><use href="#i-plus"/></svg><span>新建角色</span>
+      </button>
+      <button id="btnSettings" class="btn btn-icon" title="设置（外观主题 / 列表布局 / 动效）" aria-label="设置">
+        <svg class="ico"><use href="#i-gear"/></svg>
+      </button>
+    </header>
+
+    <!-- ================= 主布局 ================= -->
+    <main class="layout">
+      <!-- 左侧：角色 / 故事 双视图 -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="side-tabs nav-pill-host" id="sideTabs" role="tablist" aria-label="侧栏视图">
+            <span class="nav-pill" aria-hidden="true"></span>
+            <button class="side-tab active" data-view="chars" role="tab" aria-selected="true" title="角色列表">
+              <svg class="ico"><use href="#i-user"/></svg><span>角色</span>
+            </button>
+            <button class="side-tab" data-view="stories" role="tab" aria-selected="false" title="独立故事库">
+              <svg class="ico"><use href="#i-book"/></svg><span>故事</span>
+            </button>
           </div>
-          <div class="quick-info">
-            <h1 id="qiName" class="char-name"></h1>
-            <div id="qiAlias" class="char-alias"></div>
-            <div id="qiPersonality" class="chips"></div>
-            <dl class="qi-dl">
-              <div><dt>性别</dt><dd id="qiGender"></dd></div>
-              <div><dt>种族</dt><dd id="qiRace"></dd></div>
-              <div><dt>所属</dt><dd id="qiAffiliation"></dd></div>
-              <div><dt>身份</dt><dd id="qiProfession"></dd></div>
-              <div><dt>登场作品</dt><dd id="qiWork"></dd></div>
-            </dl>
-            <div class="hero-actions">
-              <button id="btnEdit" class="btn btn-primary">✏️ 编辑资料</button>
-              <button id="btnExportCard" class="btn btn-secondary" title="将本角色连同全部小故事导出为一份 JSON 角色卡">📤 导出角色卡</button>
-              <button id="btnDelete" class="btn btn-danger">🗑 删除角色</button>
+          <span id="charCount" class="count-badge" title="当前列表条目数">0</span>
+        </div>
+
+        <!-- 角色视图 -->
+        <div id="charsView">
+          <div id="charList" class="char-list"></div>
+          <div id="charListEmpty" class="empty-state hidden">
+            <svg class="ico empty-ico"><use href="#i-user"/></svg>
+            <b>还没有角色</b>
+            <span>点击右上角「新建角色」开始建档</span>
+          </div>
+        </div>
+
+        <!-- 故事视图 -->
+        <div id="storiesView" class="hidden">
+          <div class="story-list-header">
+            <span>独立故事库</span>
+            <button id="btnNewGlobalStory2" class="btn btn-small btn-primary" title="撰写独立故事">
+              <svg class="ico"><use href="#i-plus"/></svg><span>写故事</span>
+            </button>
+          </div>
+          <div id="globalStoryList" class="char-list"></div>
+          <div id="globalStoryEmpty" class="empty-state hidden">
+            <svg class="ico empty-ico"><use href="#i-book"/></svg>
+            <b>还没有独立故事</b>
+            <span>点击「写故事」开始创作</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- 右侧详情 -->
+      <section class="detail" id="detail">
+        <div id="detailEmpty" class="detail-empty">
+          <svg class="ico"><use href="#i-layers"/></svg>
+          <b>从左侧选择一个角色</b>
+          <span>档案、能力、关系与故事都会在这里展开</span>
+        </div>
+
+        <div id="detailContent" class="hidden">
+          <!-- 主视觉区：立绘 + 快速印象 -->
+          <div class="hero">
+            <div class="portrait-frame">
+              <img id="portraitImg" alt="立绘" class="portrait-img hidden">
+              <div id="portraitFallback" class="portrait-fallback hidden"></div>
+            </div>
+            <div class="quick-info">
+              <div class="qi-eyebrow">
+                <span id="qiRaceText" class="qi-tag"></span>
+              </div>
+              <h1 id="qiName" class="char-name"></h1>
+              <div id="qiAlias" class="char-alias"></div>
+              <div id="qiPersonality" class="chips"></div>
+              <dl class="qi-dl">
+                <div><dt>性别</dt><dd id="qiGender"></dd></div>
+                <div><dt>种族</dt><dd id="qiRace"></dd></div>
+                <div><dt>所属</dt><dd id="qiAffiliation"></dd></div>
+                <div><dt>身份</dt><dd id="qiProfession"></dd></div>
+                <div><dt>登场作品</dt><dd id="qiWork"></dd></div>
+              </dl>
+              <div class="hero-actions">
+                <button id="btnEdit" class="btn btn-primary">
+                  <svg class="ico"><use href="#i-edit"/></svg><span>编辑资料</span>
+                </button>
+                <button id="btnExportCard" class="btn" title="将本角色连同全部小故事导出为一份 JSON 角色卡">
+                  <svg class="ico"><use href="#i-export"/></svg><span>导出角色卡</span>
+                </button>
+                <button id="btnDelete" class="btn btn-danger">
+                  <svg class="ico"><use href="#i-trash"/></svg><span>删除</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 标签页：滑动背板 -->
+          <nav class="tabs nav-pill-host" id="detailTabs" role="tablist" aria-label="角色档案分区">
+            <span class="nav-pill" aria-hidden="true"></span>
+            <button class="tab-btn active" data-tab="basic" role="tab" aria-selected="true">基础资料</button>
+            <button class="tab-btn" data-tab="abilities" role="tab" aria-selected="false">能力武装</button>
+            <button class="tab-btn" data-tab="relations" role="tab" aria-selected="false">关系网络</button>
+            <button class="tab-btn" data-tab="stories" role="tab" aria-selected="false">小故事</button>
+          </nav>
+
+          <div id="tab-basic" class="tab-panel active">
+            <div class="panel-card">
+              <h3>基础档案</h3>
+              <dl class="info-grid" id="basicInfo"></dl>
+            </div>
+          </div>
+
+          <div id="tab-abilities" class="tab-panel">
+            <div class="panel-card">
+              <h3>能力</h3>
+              <div id="abilitiesList" class="card-list"></div>
+            </div>
+            <div class="panel-card">
+              <h3>持有武器</h3>
+              <div id="weaponsList" class="card-list"></div>
+            </div>
+            <div class="panel-card">
+              <h3>战斗属性</h3>
+              <div id="combatStatsList" class="kv-list"></div>
+            </div>
+          </div>
+
+          <div id="tab-relations" class="tab-panel">
+            <div class="panel-card">
+              <h3>关系图</h3>
+              <div id="relationGraph"></div>
+            </div>
+            <div class="relation-groups" id="relationGroups"></div>
+          </div>
+
+          <div id="tab-stories" class="tab-panel">
+            <div class="panel-card stories-header">
+              <h3>角色小故事（<span id="storyCount">0</span>）</h3>
+              <button id="btnNewStory" class="btn btn-primary btn-small">
+                <svg class="ico"><use href="#i-plus"/></svg><span>撰写新故事</span>
+              </button>
+            </div>
+            <div id="storiesList" class="story-list"></div>
+            <div class="panel-card">
+              <h3>参与的故事（<span id="participatedCount">0</span>）</h3>
+              <div id="participatedList" class="story-list"></div>
             </div>
           </div>
         </div>
+      </section>
 
-        <!-- 标签页 -->
-        <nav class="tabs">
-          <button class="tab-btn active" data-tab="basic">基础资料</button>
-          <button class="tab-btn" data-tab="abilities">能力武装</button>
-          <button class="tab-btn" data-tab="relations">关系网络</button>
-          <button class="tab-btn" data-tab="stories">小故事</button>
-        </nav>
-
-        <div id="tab-basic" class="tab-panel active">
-          <div class="panel-card">
-            <h3>基础档案</h3>
-            <dl class="info-grid" id="basicInfo"></dl>
-          </div>
+      <!-- 独立故事详情视图 -->
+      <section id="globalStoryDetail" class="detail hidden">
+        <div id="gsEmptyDetail" class="detail-empty">
+          <svg class="ico"><use href="#i-book"/></svg>
+          <b>从左侧选择一个故事</b>
+          <span>全文、标签与参与角色都会在这里展开</span>
         </div>
-
-        <div id="tab-abilities" class="tab-panel">
-          <div class="panel-card">
-            <h3>能力</h3>
-            <div id="abilitiesList" class="card-list"></div>
+        <article class="panel-card story-detail-card hidden">
+          <div class="story-detail-head">
+            <h2 id="gsTitle" class="story-detail-title"></h2>
+            <div id="gsMeta" class="story-detail-meta"></div>
           </div>
-          <div class="panel-card">
-            <h3>持有武器</h3>
-            <div id="weaponsList" class="card-list"></div>
+          <div id="gsContent" class="md-body story-detail-content"></div>
+          <div class="story-participants" id="gsParticipants"></div>
+          <div class="story-detail-actions">
+            <button id="btnGSBack" class="btn">
+              <svg class="ico"><use href="#i-user"/></svg><span>返回角色</span>
+            </button>
+            <button id="btnGSEdit" class="btn btn-primary">
+              <svg class="ico"><use href="#i-edit"/></svg><span>编辑</span>
+            </button>
+            <button id="btnGSDelete" class="btn btn-danger">
+              <svg class="ico"><use href="#i-trash"/></svg><span>删除</span>
+            </button>
           </div>
-          <div class="panel-card">
-            <h3>战斗属性</h3>
-            <div id="combatStatsList" class="kv-list"></div>
-          </div>
-        </div>
-
-        <div id="tab-relations" class="tab-panel">
-          <div class="panel-card">
-            <h3>关系图</h3>
-            <div id="relationGraph"></div>
-          </div>
-          <div class="relation-groups" id="relationGroups"></div>
-        </div>
-
-        <div id="tab-stories" class="tab-panel">
-          <div class="panel-card stories-header">
-            <h3>角色小故事（<span id="storyCount">0</span>）</h3>
-            <button id="btnNewStory" class="btn btn-primary">✍️ 撰写新故事</button>
-          </div>
-          <div id="storiesList" class="story-list"></div>
-          <div class="panel-card">
-            <h3>参与的故事（<span id="participatedCount">0</span>）</h3>
-            <div id="participatedList" class="story-list"></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- 独立故事详情视图 -->
-    <section id="globalStoryDetail" class="detail hidden">
-      <div id="gsEmptyDetail" class="detail-empty">← 从左侧选择一个故事查看全文</div>
-      <div class="panel-card story-detail-card hidden">
-        <div class="story-detail-head">
-          <h2 id="gsTitle" class="story-detail-title"></h2>
-          <div id="gsMeta" class="story-detail-meta"></div>
-        </div>
-        <div id="gsContent" class="md-body story-detail-content"></div>
-        <div class="story-participants" id="gsParticipants"></div>
-        <div class="story-detail-actions">
-          <button id="btnGSBack" class="btn btn-secondary">← 返回角色</button>
-          <button id="btnGSEdit" class="btn btn-primary">✏️ 编辑</button>
-          <button id="btnGSDelete" class="btn btn-danger">🗑 删除</button>
-        </div>
-      </div>
-    </section>
-  </main>
+        </article>
+      </section>
+    </main>
+  </div>
 
   <!-- ================= 角色编辑弹窗 ================= -->
   <div id="charModal" class="modal-mask hidden">
-    <div class="modal">
+    <div class="modal" data-dialog-size="large" role="dialog" aria-modal="true" aria-labelledby="charModalTitle">
       <div class="modal-header">
         <h2 id="charModalTitle">新建角色</h2>
-        <button class="modal-close" id="charModalClose">✕</button>
+        <button class="modal-close" id="charModalClose" aria-label="关闭">
+          <svg class="ico"><use href="#i-close"/></svg>
+        </button>
       </div>
       <div class="modal-body">
         <form id="charForm" autocomplete="off">
           <!-- 形象图片 -->
-          <section class="form-section">
-            <h4>形象图片</h4>
-            <div class="image-pickers">
-              <div class="image-picker">
-                <div class="image-preview" id="avatarPreview"><span>未选择</span></div>
-                <div class="image-picker-actions">
-                  <button type="button" class="btn btn-small" data-pick="avatar">选择头像</button>
-                  <button type="button" class="btn btn-small btn-danger-ghost hidden" data-remove="avatar">移除</button>
+          <details class="fold form-section" open>
+            <summary><h4>形象图片</h4><svg class="ico fold-chevron"><use href="#i-down"/></svg></summary>
+            <div class="fold-body">
+              <div class="image-pickers">
+                <div class="image-picker">
+                  <div class="image-preview" id="avatarPreview"><span>未选择</span></div>
+                  <div class="image-picker-actions">
+                    <button type="button" class="btn btn-small" data-pick="avatar">选择头像</button>
+                    <button type="button" class="btn btn-small btn-danger-ghost hidden" data-remove="avatar">移除</button>
+                  </div>
+                </div>
+                <div class="image-picker">
+                  <div class="image-preview portrait" id="portraitPreview"><span>未选择</span></div>
+                  <div class="image-picker-actions">
+                    <button type="button" class="btn btn-small" data-pick="portrait">选择立绘</button>
+                    <button type="button" class="btn btn-small btn-danger-ghost hidden" data-remove="portrait">移除</button>
+                  </div>
                 </div>
               </div>
-              <div class="image-picker">
-                <div class="image-preview portrait" id="portraitPreview"><span>未选择</span></div>
-                <div class="image-picker-actions">
-                  <button type="button" class="btn btn-small" data-pick="portrait">选择立绘</button>
-                  <button type="button" class="btn btn-small btn-danger-ghost hidden" data-remove="portrait">移除</button>
-                </div>
-              </div>
+              <p class="form-hint">头像选择后可在弹窗中拖动 / 滚轮缩放，裁剪为圆形；立绘原图保存。图片复制到 images/char_{角色ID}/ 目录（avatar.* / portrait.*），支持 png / jpg / webp / gif。</p>
             </div>
-            <p class="form-hint">头像选择后可在弹窗中拖动 / 滚轮缩放，裁剪为圆形；立绘原图保存。图片复制到 images/char_{角色ID}/ 目录（avatar.* / portrait.*），支持 png / jpg / webp / gif。</p>
-          </section>
+          </details>
 
           <!-- 基本信息 -->
-          <section class="form-section">
-            <h4>基本信息</h4>
-            <div class="form-grid">
-              <label>姓名 *<input id="f_name" required placeholder="必填"></label>
-              <label>别名 / 称号<input id="f_alias"></label>
-              <label>年龄<input id="f_age" type="number" min="0"></label>
-              <label>性别<input id="f_gender"></label>
-              <label>种族<input id="f_race"></label>
-              <label>出生年月<input id="f_birth_date" placeholder="如 3月14日 / 2035-04-01"></label>
-              <label>出生地点<input id="f_birth_place"></label>
-              <label>所属阵营<input id="f_affiliation"></label>
-              <label>身份 / 职业<input id="f_profession"></label>
-              <label class="span-2">性格特征<input id="f_personality" placeholder="逗号分隔多个关键词，如：冷静, 毒舌, 完美主义"></label>
+          <details class="fold form-section" open>
+            <summary><h4>基本信息</h4><svg class="ico fold-chevron"><use href="#i-down"/></svg></summary>
+            <div class="fold-body">
+              <div class="form-grid">
+                <label>姓名 *<input id="f_name" required placeholder="必填"></label>
+                <label>别名 / 称号<input id="f_alias"></label>
+                <label>年龄<input id="f_age" type="number" min="0"></label>
+                <label>性别<input id="f_gender"></label>
+                <label>种族<input id="f_race"></label>
+                <label>出生年月<input id="f_birth_date" placeholder="如 3月14日 / 2035-04-01"></label>
+                <label>出生地点<input id="f_birth_place"></label>
+                <label>所属阵营<input id="f_affiliation"></label>
+                <label>身份 / 职业<input id="f_profession"></label>
+                <label class="span-2">性格特征<input id="f_personality" placeholder="逗号分隔多个关键词，如：冷静, 毒舌, 完美主义"></label>
+              </div>
             </div>
-          </section>
+          </details>
 
           <!-- 能力列表 -->
-          <section class="form-section">
-            <h4>能力列表</h4>
-            <div id="abilitiesRows" class="dyn-rows"></div>
-            <button type="button" class="btn btn-small" id="btnAddAbility">＋ 添加能力</button>
-          </section>
+          <details class="fold form-section" open>
+            <summary><h4>能力列表</h4><svg class="ico fold-chevron"><use href="#i-down"/></svg></summary>
+            <div class="fold-body">
+              <div id="abilitiesRows" class="dyn-rows"></div>
+              <button type="button" class="btn btn-small" id="btnAddAbility">
+                <svg class="ico"><use href="#i-plus"/></svg><span>添加能力</span>
+              </button>
+            </div>
+          </details>
 
           <!-- 持有武器 -->
-          <section class="form-section">
-            <h4>持有武器</h4>
-            <div id="weaponsRows" class="dyn-rows"></div>
-            <button type="button" class="btn btn-small" id="btnAddWeapon">＋ 添加武器</button>
-          </section>
+          <details class="fold form-section" open>
+            <summary><h4>持有武器</h4><svg class="ico fold-chevron"><use href="#i-down"/></svg></summary>
+            <div class="fold-body">
+              <div id="weaponsRows" class="dyn-rows"></div>
+              <button type="button" class="btn btn-small" id="btnAddWeapon">
+                <svg class="ico"><use href="#i-plus"/></svg><span>添加武器</span>
+              </button>
+            </div>
+          </details>
 
           <!-- 战斗属性 -->
-          <section class="form-section">
-            <h4>战斗属性（可选）</h4>
-            <div id="combatStatsRows" class="dyn-rows"></div>
-            <button type="button" class="btn btn-small" id="btnAddCombatStat">＋ 添加属性（如 hp / attack）</button>
-          </section>
+          <details class="fold form-section" open>
+            <summary><h4>战斗属性（可选）</h4><svg class="ico fold-chevron"><use href="#i-down"/></svg></summary>
+            <div class="fold-body">
+              <div id="combatStatsRows" class="dyn-rows"></div>
+              <button type="button" class="btn btn-small" id="btnAddCombatStat">
+                <svg class="ico"><use href="#i-plus"/></svg><span>添加属性（如 hp / attack）</span>
+              </button>
+            </div>
+          </details>
 
           <!-- 关系网络 -->
-          <section class="form-section">
-            <h4>关系网络</h4>
-            <div class="relation-editor-groups">
-              <div class="relation-editor-group">
-                <h5>亲属</h5>
-                <div id="familyRows" class="dyn-rows"></div>
-                <button type="button" class="btn btn-small" data-add-rel="family">＋ 添加</button>
-              </div>
-              <div class="relation-editor-group">
-                <h5>同伴</h5>
-                <div id="companionsRows" class="dyn-rows"></div>
-                <button type="button" class="btn btn-small" data-add-rel="companions">＋ 添加</button>
-              </div>
-              <div class="relation-editor-group">
-                <h5>敌对</h5>
-                <div id="rivalsRows" class="dyn-rows"></div>
-                <button type="button" class="btn btn-small" data-add-rel="rivals">＋ 添加</button>
-              </div>
-              <div class="relation-editor-group">
-                <h5>导师 / 学生</h5>
-                <div id="mentorsRows" class="dyn-rows"></div>
-                <button type="button" class="btn btn-small" data-add-rel="mentors">＋ 添加</button>
+          <details class="fold form-section" open>
+            <summary><h4>关系网络</h4><svg class="ico fold-chevron"><use href="#i-down"/></svg></summary>
+            <div class="fold-body">
+              <div class="relation-editor-groups">
+                <div class="relation-editor-group">
+                  <h5>亲属</h5>
+                  <div id="familyRows" class="dyn-rows"></div>
+                  <button type="button" class="btn btn-small" data-add-rel="family">＋ 添加</button>
+                </div>
+                <div class="relation-editor-group">
+                  <h5>同伴</h5>
+                  <div id="companionsRows" class="dyn-rows"></div>
+                  <button type="button" class="btn btn-small" data-add-rel="companions">＋ 添加</button>
+                </div>
+                <div class="relation-editor-group">
+                  <h5>敌对</h5>
+                  <div id="rivalsRows" class="dyn-rows"></div>
+                  <button type="button" class="btn btn-small" data-add-rel="rivals">＋ 添加</button>
+                </div>
+                <div class="relation-editor-group">
+                  <h5>导师 / 学生</h5>
+                  <div id="mentorsRows" class="dyn-rows"></div>
+                  <button type="button" class="btn btn-small" data-add-rel="mentors">＋ 添加</button>
+                </div>
               </div>
             </div>
-          </section>
+          </details>
 
           <!-- 元信息 -->
-          <section class="form-section">
-            <h4>元信息</h4>
-            <div class="form-grid">
-              <label>登场作品<input id="f_work"></label>
-              <label>首次出场<input id="f_first_appearance"></label>
-              <label>稀有度<input id="f_rarity"></label>
-              <label class="span-2">标签<input id="f_tags" placeholder="逗号分隔，如：主线, 御三家"></label>
+          <details class="fold form-section" open>
+            <summary><h4>元信息</h4><svg class="ico fold-chevron"><use href="#i-down"/></svg></summary>
+            <div class="fold-body">
+              <div class="form-grid">
+                <label>登场作品<input id="f_work"></label>
+                <label>首次出场<input id="f_first_appearance"></label>
+                <label>稀有度<input id="f_rarity"></label>
+                <label class="span-2">标签<input id="f_tags" placeholder="逗号分隔，如：主线, 御三家"></label>
+              </div>
             </div>
-          </section>
+          </details>
         </form>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" id="charModalCancel">取消</button>
+        <button class="btn" id="charModalCancel">取消</button>
         <button class="btn btn-primary" id="charModalSave">保存</button>
       </div>
     </div>
@@ -266,33 +380,39 @@
 
   <!-- ================= 头像圆形裁剪弹窗 ================= -->
   <div id="cropModal" class="modal-mask hidden">
-    <div class="modal modal-crop">
+    <div class="modal" data-dialog-size="medium" role="dialog" aria-modal="true" aria-labelledby="cropTitle">
       <div class="modal-header">
-        <h2>裁剪头像</h2>
-        <button class="modal-close" id="cropClose">✕</button>
+        <h2 id="cropTitle">裁剪头像</h2>
+        <button class="modal-close" id="cropClose" aria-label="关闭">
+          <svg class="ico"><use href="#i-close"/></svg>
+        </button>
       </div>
       <div class="modal-body">
         <p class="crop-hint">拖动图片移动位置 · 滚轮缩放 · 圆形区域即为最终头像</p>
         <canvas id="cropCanvas" width="440" height="440"></canvas>
         <div class="crop-actions">
-          <button class="btn btn-small btn-secondary" id="cropReset">↺ 重置</button>
+          <button class="btn btn-small" id="cropReset">
+            <svg class="ico"><use href="#i-reset"/></svg><span>重置</span>
+          </button>
           <span class="crop-zoom-hint" id="cropZoomLabel"></span>
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" id="cropCancel">取消</button>
-        <button class="btn btn-primary" id="cropConfirm">✓ 使用此头像</button>
+        <button class="btn" id="cropCancel">取消</button>
+        <button class="btn btn-primary" id="cropConfirm">
+          <svg class="ico"><use href="#i-check"/></svg><span>使用此头像</span>
+        </button>
       </div>
     </div>
   </div>
 
   <!-- ================= 通用确认弹窗 ================= -->
   <div id="confirmModal" class="modal-mask hidden">
-    <div class="modal modal-sm">
+    <div class="modal" data-dialog-size="small" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle">
       <div class="modal-header"><h2 id="confirmTitle">确认</h2></div>
-      <div class="modal-body"><p id="confirmMessage"></p></div>
+      <div class="modal-body"><p id="confirmMessage" class="confirm-message"></p></div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" id="confirmCancel">取消</button>
+        <button class="btn" id="confirmCancel">取消</button>
         <button class="btn btn-danger" id="confirmOk">确定</button>
       </div>
     </div>
@@ -300,10 +420,12 @@
 
   <!-- ================= 小故事阅读弹窗 ================= -->
   <div id="storyReader" class="modal-mask hidden">
-    <div class="modal modal-reader">
+    <div class="modal" data-dialog-size="large" role="dialog" aria-modal="true" aria-labelledby="readerTitle">
       <div class="modal-header">
         <h2 id="readerTitle">故事标题</h2>
-        <button class="modal-close" id="readerClose">✕</button>
+        <button class="modal-close" id="readerClose" aria-label="关闭">
+          <svg class="ico"><use href="#i-close"/></svg>
+        </button>
       </div>
       <div class="modal-body">
         <div id="readerMeta" class="reader-meta"></div>
@@ -313,17 +435,109 @@
       <div class="modal-footer reader-footer">
         <span id="readerCharInfo" class="reader-char"></span>
         <span class="reader-spacer"></span>
-        <button class="btn btn-secondary" id="readerEdit">✏️ 编辑</button>
-        <button class="btn btn-danger" id="readerDelete">🗑 删除</button>
+        <button class="btn" id="readerEdit">
+          <svg class="ico"><use href="#i-edit"/></svg><span>编辑</span>
+        </button>
+        <button class="btn btn-danger" id="readerDelete">
+          <svg class="ico"><use href="#i-trash"/></svg><span>删除</span>
+        </button>
         <button class="btn btn-primary" id="readerCloseBtn">关闭</button>
       </div>
     </div>
   </div>
 
+  <!-- ================= 设置弹窗 ================= -->
+  <div id="settingsModal" class="modal-mask hidden">
+    <div class="modal" data-dialog-size="medium" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-header">
+        <h2 id="settingsTitle">设置</h2>
+        <button class="modal-close" id="settingsClose" aria-label="关闭">
+          <svg class="ico"><use href="#i-close"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <!-- 主题外观 -->
+        <section class="set-section">
+          <div class="set-head">
+            <h4>主题外观</h4>
+            <span class="set-hint" id="themeHint"></span>
+          </div>
+          <div class="seg nav-pill-host" id="segTheme" role="group" aria-label="主题">
+            <span class="nav-pill" aria-hidden="true"></span>
+            <button class="seg-item" data-value="light">浅色</button>
+            <button class="seg-item" data-value="dark">深色</button>
+            <button class="seg-item" data-value="system">跟随系统</button>
+          </div>
+          <p class="set-desc">切换即时生效。选择「跟随系统」后，会随 Windows 的浅色 / 深色模式自动切换。</p>
+        </section>
+
+        <!-- 角色列表布局 -->
+        <section class="set-section">
+          <div class="set-head"><h4>角色列表布局</h4></div>
+          <div class="layout-cards" id="segLayout" role="group" aria-label="角色列表布局">
+            <button class="layout-card" data-value="list">
+              <span class="lc-preview lc-list"><i></i><i></i><i></i></span>
+              <span class="lc-text"><b>列表</b><em>头像 + 姓名，信息最紧凑</em></span>
+              <svg class="ico lc-check"><use href="#i-check"/></svg>
+            </button>
+            <button class="layout-card" data-value="grid">
+              <span class="lc-preview lc-grid"><i></i><i></i><i></i><i></i></span>
+              <span class="lc-text"><b>网格</b><em>2 列卡片墙，立绘当封面</em></span>
+              <svg class="ico lc-check"><use href="#i-check"/></svg>
+            </button>
+            <button class="layout-card" data-value="compact">
+              <span class="lc-preview lc-compact"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+              <span class="lc-text"><b>紧凑</b><em>3 列密排，只留立绘与姓名</em></span>
+              <svg class="ico lc-check"><use href="#i-check"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <!-- 动效 -->
+        <section class="set-section">
+          <div class="set-head"><h4>动效</h4></div>
+          <label class="set-row">
+            <span class="set-row-text">
+              <b>减少动效</b>
+              <em>关闭转场与位移，只保留颜色反馈（系统开启「减少动态效果」时自动生效）</em>
+            </span>
+            <span class="toggle"><input type="checkbox" id="optReduceMotion"></span>
+          </label>
+        </section>
+
+        <!-- 面板通透度 -->
+        <section class="set-section">
+          <div class="set-head">
+            <h4>面板通透度</h4>
+            <span class="set-hint" id="panelOpacityHint">82%</span>
+          </div>
+          <input type="range" id="optPanelOpacity" class="range" min="55" max="100" step="1" value="82" aria-label="面板通透度">
+          <p class="set-desc">数值越低，界面外壳的毛玻璃越透，背景光晕越明显。</p>
+        </section>
+
+        <!-- 关于 -->
+        <section class="set-section set-about">
+          <div class="set-head"><h4>关于</h4></div>
+          <dl class="about-list">
+            <div><dt>版本</dt><dd>2.0.2</dd></div>
+            <div><dt>数据文件</dt><dd>data/characters.db（SQLite）</dd></div>
+            <div><dt>图片目录</dt><dd>images/char_{角色ID}/</dd></div>
+          </dl>
+        </section>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="settingsReset">恢复默认</button>
+        <span class="reader-spacer"></span>
+        <button class="btn btn-primary" id="settingsDone">完成</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast 提示 -->
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <script src="markdown.js"></script>
+  <script src="motion.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

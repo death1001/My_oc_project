@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: file:; style-src 'self' 'unsafe-inline'; script-src 'self';">
   <title>小故事编辑器</title>
+  <!-- 主题预加载：与主窗口共享同一份 localStorage 偏好 -->
+  <script src="theme-init.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body class="editor-body">
@@ -14,8 +16,8 @@
         <div id="charInfo" class="editor-char"></div>
       </div>
       <div class="editor-actions">
-        <button id="btnTogglePreview" class="btn btn-secondary" title="Markdown 实时预览">预览</button>
-        <button id="btnClose" class="btn btn-secondary">关闭</button>
+        <button id="btnTogglePreview" class="btn" title="Markdown 实时预览">预览</button>
+        <button id="btnClose" class="btn">关闭</button>
         <button id="btnDelete" class="btn btn-danger hidden">删除</button>
         <button id="btnSave" class="btn btn-primary">保存</button>
       </div>

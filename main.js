@@ -5,7 +5,7 @@
  * 窗口创建、IPC 通信、数据库初始化、图片管理与导入导出
  * ============================================================ */
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -19,6 +19,12 @@ let storyEditorWin = null;  // 小故事编辑器窗口
 
 /* ---------------- 窗口 ---------------- */
 
+/* 窗口底色 = styles.css 的 --bg。主进程读不到 localStorage 里的主题偏好，
+ * 只能按系统深浅取近似值：跟随系统时完全准确，用户手工选反时才有一帧偏差。 */
+function shellBg() {
+  return nativeTheme.shouldUseDarkColors ? '#18181b' : '#eef3fd';
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -27,7 +33,7 @@ function createWindow() {
     minHeight: 700,
     title: '角色资料查询器',
     autoHideMenuBar: true,
-    backgroundColor: '#171a21',
+    backgroundColor: shellBg(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -51,7 +57,7 @@ function createStoryEditorWindow(payload) {
     minHeight: 640,
     title: '小故事编辑器',
     autoHideMenuBar: true,
-    backgroundColor: '#171a21',
+    backgroundColor: shellBg(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -304,7 +310,22 @@ if (!gotLock) {
   });
 
   app.whenReady().then(() => {
-    db.initDatabase();          // 建库建表 + 确保 images/ 目录存在（加分项4）
+    // 数据库初始化失败时必须显式报错并退出：
+    // 否则进程会保持存活但没有任何窗口，同时占着单实例锁，
+    // 导致之后每次双击快捷方式都被判定为「第二实例」而静默退出。
+    try {
+      db.initDatabase();        // 建库建表 + 确保 images/ 目录存在（加分项4）
+    } catch (err) {
+      console.error('[startup] 数据库初始化失败', err);
+      dialog.showErrorBox(
+        '启动失败',
+        '数据库初始化失败：\n' + ((err && err.message) || String(err)) +
+        '\n\n常见原因：better-sqlite3 原生模块缺失或 ABI 不匹配。\n' +
+        '请在项目目录执行：npm run rebuild'
+      );
+      app.quit();
+      return;
+    }
     registerIpc();
     createWindow();
     app.on('activate', () => {

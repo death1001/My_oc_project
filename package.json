@@ -1,13 +1,13 @@
 {
   "name": "character-library",
   "productName": "角色资料查询器",
-  "version": "1.0.0",
+  "version": "2.0.2",
   "description": "本地单机角色资料管理工具：角色档案 + 能力武装 + 关系网络 + 小故事（Electron + SQLite）",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "check": "node --check main.js && node --check database.js && node --check preload.js && node --check renderer.js && node --check story-editor.js && node --check markdown.js"
+    "check": "node --check main.js && node --check database.js && node --check preload.js && node --check renderer.js && node --check story-editor.js && node --check markdown.js && node --check theme-init.js && node --check motion.js"
   },
   "license": "MIT",
   "dependencies": {

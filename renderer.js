@@ -18,6 +18,25 @@ function escapeHtml(s) {
 }
 function escapeAttr(s) { return escapeHtml(s); }
 
+/* 图标：全部引用 index.html 里的 <symbol> 精灵，颜色随 currentColor */
+function icon(name, cls) {
+  return '<svg class="ico' + (cls ? ' ' + cls : '') + '" aria-hidden="true"><use href="#i-' + name + '"/></svg>';
+}
+
+/* 图片 URL 缓存：relPath → file:// 地址（地址里已带 ?t=mtime，路径变了地址才变）
+ * 目的是避免每次重渲染都为同一张图走一趟 IPC + 磁盘 stat，
+ * 也让切换列表时不再发生重复解码（动画期间不做多余的重活）。 */
+const imageUrlCache = new Map();
+function imageUrl(relPath) {
+  if (!relPath) return Promise.resolve(null);
+  const hit = imageUrlCache.get(relPath);
+  if (hit) return Promise.resolve({ ok: true, data: hit });
+  return bridge.getImageUrl(relPath).then(r => {
+    if (r && r.ok && r.data) imageUrlCache.set(relPath, r.data);
+    return r;
+  }).catch(() => null);
+}
+
 /* 绝对路径 -> file:// URL（处理盘符冒号与特殊字符） */
 function toFileUrl(p) {
   if (!p) return '';
@@ -37,6 +56,10 @@ let toastTimer = null;
 function toast(msg, type = 'info') {
   const el = $('#toast');
   el.textContent = msg;
+  /* 先回到「已显示但透明」的态，强制回流后再叠加 .show，
+     否则 hidden（display:none）与 .show 同帧生效，过渡不会播 */
+  el.className = 'toast';
+  void el.offsetWidth;
   el.className = 'toast show ' + type;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.className = 'toast hidden'; }, 2800);
@@ -47,11 +70,11 @@ let confirmCb = null;
 function showConfirm(title, message, onOk) {
   $('#confirmTitle').textContent = title;
   $('#confirmMessage').textContent = message;
-  $('#confirmModal').classList.remove('hidden');
+  openDialog($('#confirmModal'));
   confirmCb = onOk;
 }
 function closeConfirm() {
-  $('#confirmModal').classList.add('hidden');
+  closeDialog($('#confirmModal'));
   confirmCb = null;
 }
 
@@ -68,9 +91,51 @@ const state = {
   currentId: null,
   filters: { q: '', affiliation: '', race: '', tag: '' },
   view: 'chars',               // 'chars' = 角色视图 | 'stories' = 故事库视图
+  pane: 'detail',              // 'detail' = 角色档案页 | 'story' = 独立故事全文页（决定转场方向）
+  layout: 'list',              // 'list' = 列表视图 | 'grid' = 网格卡片视图（启动时从 localStorage 恢复）
   currentGlobalStoryId: null,  // 当前打开的独立故事 id
   globalStoryCache: null       // 当前独立故事数据（含参与者）
 };
+
+/* 动效控制器（motion.js）；缺失时退化为空实现，保证功能不受影响 */
+const Motion = window.Motion || {
+  swap: () => Promise.resolve(),
+  enter: () => Promise.resolve(),
+  flip: () => Promise.resolve(),
+  pill: () => ({ place: () => {} }),
+  placePills: () => {},
+  dialog: (el, opening) => {
+    if (el) el.classList.toggle('hidden', !opening);
+    return Promise.resolve(true);
+  },
+  kill: () => {},
+  cancelAll: () => {},
+  isAnimating: () => false,
+  reduced: () => false,
+  config: { micro: 0, fast: 0, base: 0, exit: 0, enter: 0 }
+};
+
+/* ---------------- 弹窗开合统一入口 ----------------
+ * 布局层的唯一真相仍是 .hidden（Esc 判断、遮罩点击都读它），
+ * 入场 / 退场动画交给 motion.js 的 dialog()，中途反向不会跳帧。
+ */
+function openDialog(el) {
+  if (!el) return Promise.resolve();
+  return Motion.dialog(el, true);
+}
+function closeDialog(el) {
+  if (!el) return Promise.resolve();
+  return Motion.dialog(el, false);
+}
+function isDialogOpen(el) { return !!el && !el.classList.contains('hidden'); }
+
+/* 滑动背板落位：宿主内 .active 变化后调用一次即可。
+ * instant = true 用于「宿主刚变为可见」的场合（此时宽度才是真实值，且不该滑动）。 */
+function placePill(hostSel, instant) {
+  const host = typeof hostSel === 'string' ? $(hostSel) : hostSel;
+  const rec = host ? Motion.pill(host) : null;
+  if (rec) rec.place({ instant: !!instant });
+}
 
 let formState = {
   editingId: null, avatarSrc: null, portraitSrc: null,
@@ -89,21 +154,32 @@ async function loadCharacters(selectId) {
     if (state.characters.some(c => c.id === selectId)) { selectCharacter(selectId); return; }
   }
   if (state.currentId && state.characters.some(c => c.id === state.currentId)) {
-    renderDetail(state.currentId); // 更新后刷新当前角色详情
+    renderDetail(state.currentId, { animate: false }); // 数据刷新，不加动效噪音
     return;
   }
   if (state.characters.length) selectCharacter(state.characters[0].id);
   else showEmptyDetail();
 }
 
-async function selectCharacter(id) {
+async function selectCharacter(id, srcEl) {
+  const sameChar = state.currentId === id;
   state.currentId = id;
-  renderList();
-  renderDetail(id);
+  renderList();                       // 命中指纹时只切选中态，不重建列表
+  const srcImg = srcEl ? $('.char-card-img, .avatar-img', srcEl) : null;
+  await renderDetail(id, { animate: !sameChar });
+
+  /* 共享元素：卡片封面 → 详情立绘框。
+   * 列表模式的小头像放大 5 倍会糊，所以只在卡片布局下启用；
+   * 无立绘（立绘图仍是 hidden）时不做，避免飞向一个空框；
+   * state.currentId === id 是为了挡掉「连点后异步返回顺序错乱」的陈旧回调。 */
+  if (srcImg && state.view === 'chars' && state.layout !== 'list' && state.currentId === id) {
+    Motion.flip('cover-flip', srcImg, $('.portrait-frame'), { requireVisible: $('#portraitImg') });
+  }
 }
 
 function showEmptyDetail() {
   state.currentId = null;
+  setDetailPane('detail');        // 幂等：已在角色页则不做转场
   $('#detailContent').classList.add('hidden');
   $('#detailEmpty').classList.remove('hidden');
   renderList();
@@ -147,43 +223,140 @@ function fillSelect(sel, values, allLabel) {
 }
 
 /* ---------------- 左侧角色列表 ---------------- */
+const LAYOUT_KEY = 'clw:charLayout';
+const LAYOUTS = ['list', 'grid', 'compact'];
+
+/* 布局偏好持久化：列表 / 网格 / 紧凑网格 */
+function loadLayout() {
+  try {
+    const v = localStorage.getItem(LAYOUT_KEY);
+    if (LAYOUTS.includes(v)) return v;
+  } catch (_) { /* localStorage 不可用时退回默认 */ }
+  return 'list';
+}
+
+function saveLayout(v) {
+  try { localStorage.setItem(LAYOUT_KEY, v); } catch (_) { /* 忽略 */ }
+}
+
+/* 应用布局：滚动容器 class、侧栏宽度、设置面板中的选中态 */
+function applyLayout() {
+  const isCards = state.layout !== 'list' && state.view === 'chars';
+  const box = $('#charList');
+  box.classList.toggle('grid', isCards && state.layout === 'grid');
+  box.classList.toggle('compact', isCards && state.layout === 'compact');
+  $('.sidebar').classList.toggle('grid-mode', isCards);
+  $$('.layout-card').forEach(b => b.classList.toggle('active', b.dataset.value === state.layout));
+  /* 侧栏宽度会随布局在 300⇄352 之间过渡，侧栏标签的滑动背板必须跟着重量一次，
+     否则它会停在旧尺寸上（表现为选中块偏移、盖不满标签）。 */
+  placePill('#sideTabs', true);
+}
+
+/* 列表模式：一行一个（头像 + 姓名/别名） */
+function charItemHtml(c) {
+  return '<div class="char-item' + (c.id === state.currentId ? ' active' : '') + '" data-id="' + c.id + '">' +
+    '<div class="char-avatar">' +
+      '<span class="avatar-fallback">' + escapeHtml((c.name || '?').charAt(0)) + '</span>' +
+      '<img class="avatar-img hidden" alt="">' +
+    '</div>' +
+    '<div class="char-item-info">' +
+      '<div class="char-item-name">' + escapeHtml(c.name || '未命名') + '</div>' +
+      '<div class="char-item-alias">' + escapeHtml(c.alias || '') + '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+/* 卡片模式（网格 / 紧凑）：长方形卡片，封面为角色立绘 */
+function charCardHtml(c) {
+  const aff = String(c.affiliation || '').trim();
+  const showTag = !!aff && aff !== '无' && aff !== '—';
+  return '<div class="char-card' + (c.id === state.currentId ? ' active' : '') + '" data-id="' + c.id +
+      '" tabindex="0" role="button" aria-label="查看角色 ' + escapeAttr(c.name || '未命名') + '">' +
+    '<div class="char-card-cover">' +
+      '<div class="char-card-fallback">' +
+        '<span class="char-card-initial">' + escapeHtml((c.name || '?').charAt(0)) + '</span>' +
+        '<span class="char-card-hint">暂无立绘</span>' +
+      '</div>' +
+      '<img class="char-card-img hidden" alt="">' +
+    '</div>' +
+    (showTag ? '<div class="char-card-tag">' + escapeHtml(aff) + '</div>' : '') +
+    '<div class="char-card-info">' +
+      '<div class="char-card-name">' + escapeHtml(c.name || '未命名') + '</div>' +
+      '<div class="char-card-alias">' + escapeHtml(c.alias || '') + '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+/* 上一次渲染的列表指纹：命中时只切换选中态，不重建 DOM。
+ * 稳定 key（角色 id）靠它来维持 —— 选中项变化不再引起整列表重建，
+ * 于是滚动位置、已解码的图片、正在进行中的过渡都不会被打断。 */
+let listFingerprint = '';
+
+/* 指纹 = 布局 + 顺序 + 参与展示的字段；任一变化才需要重建 */
+function charListFingerprint(list, isCards) {
+  return (isCards ? state.layout : 'list') + '|' + list.map(c => [
+    c.id, c.name, c.alias, c.affiliation, c.avatar_path, c.portrait_path, c.updated_at
+  ].join('~')).join('§');
+}
+
+/* 只更新选中态（配合 CSS 的指示条过渡） */
+function syncCharActive(box, isCards) {
+  $$(isCards ? '.char-card' : '.char-item', box).forEach(el => {
+    const on = Number(el.dataset.id) === state.currentId;
+    el.classList.toggle('active', on);
+    el.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+}
+
 async function renderList() {
   const list = filteredCharacters();
   const box = $('#charList');
+  const isCards = state.layout !== 'list';
   $('#charCount').textContent = list.length;
   $('#charListEmpty').classList.toggle('hidden', list.length > 0);
-  box.innerHTML = list.map(c =>
-    '<div class="char-item' + (c.id === state.currentId ? ' active' : '') + '" data-id="' + c.id + '">' +
-      '<div class="char-avatar">' +
-        '<span class="avatar-fallback">' + escapeHtml((c.name || '?').charAt(0)) + '</span>' +
-        '<img class="avatar-img hidden" alt="">' +
-      '</div>' +
-      '<div class="char-item-info">' +
-        '<div class="char-item-name">' + escapeHtml(c.name || '未命名') + '</div>' +
-        '<div class="char-item-alias">' + escapeHtml(c.alias || '') + '</div>' +
-      '</div>' +
-    '</div>'
-  ).join('');
+  applyLayout();
 
-  const items = $$('.char-item', box);
-  items.forEach(el => el.addEventListener('click', () => selectCharacter(Number(el.dataset.id))));
+  const fingerprint = charListFingerprint(list, isCards);
+  if (fingerprint === listFingerprint) {
+    syncCharActive(box, isCards);   // 只是换了选中项：原地切 class
+    return;
+  }
+  listFingerprint = fingerprint;
 
-  // 异步加载头像
+  box.innerHTML = list.map(c => (isCards ? charCardHtml(c) : charItemHtml(c))).join('');
+
+  const items = $$(isCards ? '.char-card' : '.char-item', box);
+  // 点击时把触发元素一并传下去，供共享元素动画取封面图的起始矩形
+  items.forEach(el => el.addEventListener('click', () => selectCharacter(Number(el.dataset.id), el)));
+  // 卡片支持键盘操作（Tab 聚焦 + Enter/Space 进入）
+  if (isCards) {
+    items.forEach(el => el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectCharacter(Number(el.dataset.id), el); }
+    }));
+  }
+
+  syncCharActive(box, isCards);
+
+  // 异步加载图片：列表用头像，卡片优先用立绘（封面），没有立绘退回头像
   await Promise.all(items.map(async (el) => {
     const c = state.characters.find(x => x.id === Number(el.dataset.id));
-    if (!c || !c.avatar_path) return;
-    const r = await bridge.getImageUrl(c.avatar_path);
+    if (!c) return;
+    const relPath = isCards ? (c.portrait_path || c.avatar_path) : c.avatar_path;
+    if (!relPath) return;
+    const r = await imageUrl(relPath);
     if (!r || !r.ok || !r.data) return;
-    const img = $('.avatar-img', el);
-    const fb = $('.avatar-fallback', el);
+    const img = $(isCards ? '.char-card-img' : '.avatar-img', el);
+    const fb = $(isCards ? '.char-card-fallback' : '.avatar-fallback', el);
     if (!img || !fb) return;
     img.src = r.data;
     img.onload = () => { img.classList.remove('hidden'); fb.classList.add('hidden'); };
   }));
 }
 
-/* ---------------- 详情展示 ---------------- */
-async function renderDetail(id) {
+/* ---------------- 详情展示 ----------------
+ * options.animate === false 时不做内容级进入动效
+ * （例如外层详情页刚刚完成转场，避免两层淡入叠加） */
+async function renderDetail(id, options) {
   const r = await bridge.getCharacter(id);
   if (!r || !r.ok || !r.data) { toast((r && r.error) || '加载角色详情失败', 'error'); return; }
   const c = r.data;
@@ -198,14 +371,20 @@ async function renderDetail(id) {
   $('#qiAffiliation').textContent = c.affiliation || '—';
   $('#qiProfession').textContent = c.profession || '—';
   $('#qiWork').textContent = (c.metadata && c.metadata.work) || '—';
+  // 姓名上方的小标签：种族 · 所属（都没有就整行收起）
+  $('#qiRaceText').textContent = [c.race, c.affiliation]
+    .map(v => String(v || '').trim())
+    .filter(v => v && v !== '无' && v !== '—')
+    .join(' · ');
   const pers = String(c.personality || '').split(/[,，]/).map(s => s.trim()).filter(Boolean);
   $('#qiPersonality').innerHTML = pers.map(p => '<span class="chip">' + escapeHtml(p) + '</span>').join('');
 
   // 立绘
   const pi = $('#portraitImg'), pf = $('#portraitFallback');
+  pi.style.opacity = '';            // 兜底：清掉共享元素动画可能遗留的临时透明
   let hasPortrait = false;
   if (c.portrait_path) {
-    const ir = await bridge.getImageUrl(c.portrait_path);
+    const ir = await imageUrl(c.portrait_path);
     if (ir && ir.ok && ir.data) {
       pi.src = ir.data;
       pi.classList.remove('hidden');
@@ -227,6 +406,15 @@ async function renderDetail(id) {
   renderRelationsTab(c);
   renderStoriesTab(c);
   renderParticipatedSection(c);
+
+  // 详情标签条此刻才真正有尺寸（此前 #detailContent 可能是 hidden），
+  // 首次落位用 instant，之后的重算才允许滑动
+  placePill('#detailTabs');
+
+  // 内容级进入动效：数据填好之后才播，避免「先闪空再填字」
+  if (!options || options.animate !== false) {
+    Motion.enter('char-content', $('#detailContent'), { distance: 6, duration: Motion.config.fast });
+  }
 }
 
 function renderBasicTab(c) {
@@ -286,18 +474,14 @@ function renderRelationsTab(c) {
   }).join('');
 }
 
-/* 关系图：SVG 径向布局，中心为当前角色，四周为关系对象（按类型着色） */
+/* 关系图：SVG 径向布局，中心为当前角色，四周为关系对象（按类型着色）
+ * 颜色不写死在 SVG 属性里 —— 用 .rel-<类型> 类交给 CSS 变量，
+ * 深浅两套主题各自给一档明度，属性上的 fill/stroke 无法引用 var()。 */
 function relationGraphHtml(c) {
-  const groupMeta = {
-    family: { label: '亲属', color: '#4caf7d' },
-    companions: { label: '同伴', color: '#5b8def' },
-    rivals: { label: '敌对', color: '#e06060' },
-    mentors: { label: '导师/学生', color: '#b07ce0' }
-  };
   const items = [];
   REL_GROUPS.forEach(g => {
     ((c.relationships && c.relationships[g.key]) || []).forEach(it => {
-      items.push({ name: it.name || '', color: groupMeta[g.key].color });
+      items.push({ name: it.name || '', kind: g.key });
     });
   });
   if (!items.length) return '<div class="empty-inline">暂无关系数据</div>';
@@ -309,16 +493,17 @@ function relationGraphHtml(c) {
     const ang = (i / items.length) * Math.PI * 2 - Math.PI / 2;
     const x = +(cx + R * Math.cos(ang)).toFixed(1);
     const y = +(cy + R * Math.sin(ang)).toFixed(1);
-    lines += '<line x1="' + cx + '" y1="' + cy + '" x2="' + x + '" y2="' + y + '" stroke="' + it.color + '" stroke-width="1.5" opacity="0.5"/>';
-    nodes += '<g class="graph-node" data-name="' + escapeAttr(it.name) + '" transform="translate(' + x + ' ' + y + ')">' +
-      '<circle r="16" fill="' + it.color + '" opacity="0.9"/>' +
+    const kind = ' rel-' + it.kind;
+    lines += '<line class="rel-line' + kind + '" x1="' + cx + '" y1="' + cy + '" x2="' + x + '" y2="' + y + '"/>';
+    nodes += '<g class="graph-node' + kind + '" data-name="' + escapeAttr(it.name) + '" transform="translate(' + x + ' ' + y + ')">' +
+      '<circle r="16"/>' +
       '<text y="5" text-anchor="middle" fill="#fff" font-size="11" font-weight="600">' + escapeHtml((it.name || '?').slice(0, 2)) + '</text>' +
       '</g>' +
-      '<text x="' + x + '" y="' + (y + 32) + '" text-anchor="middle" class="graph-label" font-size="11" fill="#cfd4de">' + escapeHtml(it.name) + '</text>';
+      '<text x="' + x + '" y="' + (y + 32) + '" text-anchor="middle" class="graph-label" font-size="11">' + escapeHtml(it.name) + '</text>';
   });
   return '<svg class="relation-svg" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet">' +
-    '<circle cx="' + cx + '" cy="' + cy + '" r="24" fill="#3a4050" stroke="#5b8def" stroke-width="2"/>' +
-    '<text x="' + cx + '" y="' + (cy + 5) + '" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">' + escapeHtml((c.name || '?').slice(0, 6)) + '</text>' +
+    '<circle class="graph-center" cx="' + cx + '" cy="' + cy + '" r="24" stroke-width="2"/>' +
+    '<text class="graph-center-text" x="' + cx + '" y="' + (cy + 5) + '" text-anchor="middle" font-size="12" font-weight="600">' + escapeHtml((c.name || '?').slice(0, 6)) + '</text>' +
     lines + nodes + '</svg>';
 }
 
@@ -346,10 +531,10 @@ function renderStoriesTab(c) {
         (tags.length ? '<div class="chips">' + tags.map(t => '<span class="chip chip-tag">' + escapeHtml(t) + '</span>').join('') + '</div>' : '') +
         '<div class="story-preview md-body">' + window.MD.render(truncateText(s.content || '', 160)) + '</div>' +
         '<div class="story-actions">' +
-          '<button type="button" class="btn btn-small" data-action="up" title="在成长时间线中上移">⬆</button>' +
-          '<button type="button" class="btn btn-small" data-action="down" title="在成长时间线中下移">⬇</button>' +
-          '<button type="button" class="btn btn-small" data-action="read" title="展开阅读全文">📖 阅读</button>' +
-          '<button type="button" class="btn btn-small" data-action="edit" title="编辑该故事">✏️ 编辑</button>' +
+          '<button type="button" class="btn btn-small" data-action="up" title="在成长时间线中上移">' + icon('up') + '</button>' +
+          '<button type="button" class="btn btn-small" data-action="down" title="在成长时间线中下移">' + icon('down') + '</button>' +
+          '<button type="button" class="btn btn-small" data-action="read" title="展开阅读全文">' + icon('book') + '<span>阅读</span></button>' +
+          '<button type="button" class="btn btn-small" data-action="edit" title="编辑该故事">' + icon('edit') + '<span>编辑</span></button>' +
         '</div>' +
       '</div>';
     }).join('') : '<div class="empty-inline">还没有小故事，点击「撰写新故事」开始记录。</div>';
@@ -432,12 +617,36 @@ async function selectGlobalStory(id) {
   $$('#globalStoryList .story-item').forEach(el => el.classList.toggle('active', Number(el.dataset.id) === id));
 }
 
+/* ---------------- 详情区「页面」切换 ----------------
+ * #detail（角色档案页）与 #globalStoryDetail（故事全文页）是互斥的两个 section，
+ * 统一由这里切换，避免各处零散地加/删 hidden 造成状态错位与方向判断失效。
+ * 返回是否真的发生了转场（调用方据此决定要不要再做内容级动效，避免双层淡入）。
+ */
+const DETAIL_PANE_ORDER = { detail: 0, story: 1 };
+
+function setDetailPane(name) {
+  const target = name === 'story' ? 'story' : 'detail';
+  if (state.pane === target) return false;                        // 幂等：已在目标页
+
+  const direction = DETAIL_PANE_ORDER[target] > DETAIL_PANE_ORDER[state.pane] ? 1 : -1;
+  const outSel = state.pane === 'story' ? '#globalStoryDetail' : '#detail';
+  const inSel = target === 'story' ? '#globalStoryDetail' : '#detail';
+  state.pane = target;
+
+  Motion.swap('detail-pane', {
+    out: $(outSel),
+    in: $(inSel),
+    kind: 'page',
+    direction: direction
+  });
+  return true;
+}
+
 function renderGlobalStoryDetail(story) {
-  $('#detail').classList.add('hidden');
+  const justSwitched = setDetailPane('story');
   $('#gsEmptyDetail').classList.add('hidden');
   const card = $('.panel-card', $('#globalStoryDetail'));
   card.classList.remove('hidden');
-  $('#globalStoryDetail').classList.remove('hidden');
   $('#gsTitle').textContent = story.title || '未命名故事';
   const tags = String(story.tags || '').split(/[,，]/).map(t => t.trim()).filter(Boolean);
   const metaParts = [];
@@ -449,6 +658,11 @@ function renderGlobalStoryDetail(story) {
   $('#gsContent').innerHTML = window.MD.render(story.content || '（空）');
   // 参与角色（故事末尾）：立绘 + 名字的角色卡
   renderParticipantCards('#gsParticipants', story.participants);
+
+  // 同一「页」内换故事属于局部状态切换：内容淡入即可
+  if (!justSwitched) {
+    Motion.enter('story-content', card, { distance: 4, duration: Motion.config.fast });
+  }
 }
 
 /* 渲染参与角色卡（立绘 + 名字），供独立故事详情与阅读弹窗共用 */
@@ -486,7 +700,8 @@ function renderParticipantCards(containerSel, participants) {
 function jumpToCharacterById(id) {
   const c = state.characters.find(x => x.id === Number(id));
   if (c) {
-    switchSideView('chars');
+    if (state.view !== 'chars') switchSideView('chars');   // 从故事库回到角色视图（侧栏 + 详情一起走转场）
+    else setDetailPane('detail');                          // 已在角色视图，只把详情翻回角色页
     selectCharacter(c.id);
     toast('已跳转到「' + c.name + '」');
   }
@@ -495,26 +710,43 @@ function jumpToCharacterById(id) {
 function showGlobalStoryEmpty() {
   state.currentGlobalStoryId = null;
   state.globalStoryCache = null;
-  $('#globalStoryDetail').classList.remove('hidden');
+  setDetailPane('story');                        // 幂等：已在故事页则什么都不做
   $('.panel-card', $('#globalStoryDetail')).classList.add('hidden');
   $('#gsEmptyDetail').classList.remove('hidden');
-  $('#detail').classList.add('hidden');
 }
 
 function switchSideView(view) {
+  if (view === state.view) return;               // 幂等：连点同一项不重启动画
+
+  const prevView = state.view;
   state.view = view;
-  $$('.side-tab').forEach(b => b.classList.toggle('active', b.dataset.view === view));
-  $('#charsView').classList.toggle('hidden', view !== 'chars');
-  $('#storiesView').classList.toggle('hidden', view !== 'stories');
+  applyLayout();                                 // 先算布局：侧栏宽度 / 网格列数立即进入过渡
+
+  // 1) 顶部标签选中态：底衬由滑动背板负责，条目只切文字色
+  $$('.side-tab').forEach(b => {
+    const on = b.dataset.view === view;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  placePill('#sideTabs');
+
+  // 2) 侧栏内容区：淡入 + 水平位移，方向随标签顺序（前进向右、返回向左）
+  Motion.swap('sidebar-list', {
+    out: $(prevView === 'chars' ? '#charsView' : '#storiesView'),
+    in: $(view === 'chars' ? '#charsView' : '#storiesView'),
+    kind: 'local',
+    direction: view === 'chars' ? -1 : 1
+  });
+
+  // 3) 右侧详情区：页面级转场（角色档案 ↔ 故事全文）
   if (view === 'stories') {
-    $('#detail').classList.add('hidden');
+    setDetailPane('story');
     renderGlobalStoryList();
     if (state.currentGlobalStoryId) selectGlobalStory(state.currentGlobalStoryId);
     else showGlobalStoryEmpty();
   } else {
-    $('#globalStoryDetail').classList.add('hidden');
-    $('#detail').classList.remove('hidden');
-    if (state.currentId) renderDetail(state.currentId);
+    const switched = setDetailPane('detail');
+    if (state.currentId) renderDetail(state.currentId, { animate: !switched });
     else showEmptyDetail();
   }
 }
@@ -555,19 +787,24 @@ function openStoryReader(story, character) {
   $('#readerContent').innerHTML = window.MD.render(story.content || '（空）');
   // 参与角色（立绘 + 名字）
   renderParticipantCards('#readerParticipants', story.participants);
-  $('#storyReader').classList.remove('hidden');
+  openDialog($('#storyReader'));
 }
 
 function closeStoryReader() {
-  $('#storyReader').classList.add('hidden');
+  closeDialog($('#storyReader'));
   readerState = { story: null, character: null };
 }
 
 /* ---------------- 标签页切换 ---------------- */
 function bindTabSwitching() {
   $$('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
-    $$('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+    $$('.tab-btn').forEach(b => {
+      const on = b === btn;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
     $$('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + btn.dataset.tab));
+    placePill('#detailTabs');   // 背板滑到新标签
   }));
 }
 
@@ -651,12 +888,12 @@ function openCharForm(character) {
   resetImagePreview('avatar', character ? character.avatar_path : null);
   resetImagePreview('portrait', character ? character.portrait_path : null);
 
-  $('#charModal').classList.remove('hidden');
+  openDialog($('#charModal'));
   $('#f_name').focus();
 }
 
 function closeCharForm() {
-  $('#charModal').classList.add('hidden');
+  closeDialog($('#charModal'));
 }
 
 /* 动态行编辑 */
@@ -666,7 +903,7 @@ function addDynRow(containerSel, inputs) {
   row.innerHTML = inputs.map(i =>
     '<input class="dyn-input ' + (i.cls || '') + '" placeholder="' + escapeAttr(i.placeholder || '') + '" value="' + escapeAttr(i.value == null ? '' : String(i.value)) + '">'
   ).join('') +
-  '<button type="button" class="btn btn-small btn-danger-ghost dyn-remove" title="删除该行">✕</button>';
+  '<button type="button" class="btn btn-small btn-danger-ghost dyn-remove" title="删除该行">' + icon('close') + '</button>';
   $('.dyn-remove', row).addEventListener('click', () => row.remove());
   $(containerSel).appendChild(row);
 }
@@ -775,7 +1012,7 @@ async function openAvatarCrop(srcPath) {
   if (!img.naturalWidth || !img.naturalHeight) { toast('图片无效，无法裁剪', 'error'); return; }
   cropState.img = img;
   resetCrop();
-  $('#cropModal').classList.remove('hidden');
+  openDialog($('#cropModal'));
 }
 
 /* 重置：图片居中、缩放回初始比例 */
@@ -791,7 +1028,7 @@ function resetCrop() {
 }
 
 function closeCropModal() {
-  $('#cropModal').classList.add('hidden');
+  closeDialog($('#cropModal'));
   cropState.dragging = false;
 }
 
@@ -981,6 +1218,114 @@ async function importData() {
     });
 }
 
+/* ---------------- 设置（主题 / 布局 / 动效 / 通透度） ---------------- */
+const THEME_LABELS = { light: '浅色', dark: '深色', system: '跟随系统' };
+
+const MOTION_KEY = 'clw:reduceMotion';     // '1' | '0'
+const OPACITY_KEY = 'clw:panelOpacity';    // 55–100（整数百分数）
+const DEFAULT_OPACITY = 82;
+
+function loadReduceMotion() {
+  if (window.Theme && window.Theme.getReduceMotion) return window.Theme.getReduceMotion();
+  try { return localStorage.getItem(MOTION_KEY) === '1'; } catch (_) { return false; }
+}
+function loadPanelOpacity() {
+  if (window.Theme && window.Theme.getPanelOpacity) return window.Theme.getPanelOpacity();
+  try {
+    const n = Number(localStorage.getItem(OPACITY_KEY));
+    if (Number.isFinite(n) && n >= 55 && n <= 100) return n;
+  } catch (_) { /* 忽略 */ }
+  return DEFAULT_OPACITY;
+}
+
+/* 面板通透度：只写 --panel-opacity，两个主题的 --panel-bg 都引用它。
+ * 持久化交给 theme-init.js（首屏要读同一份值，规则只写一处）。 */
+function applyPanelOpacity(v, options) {
+  const opts = options || {};
+  const n = Math.min(Math.max(Math.round(Number(v) || DEFAULT_OPACITY), 55), 100);
+  if (window.Theme && window.Theme.setPanelOpacity) {
+    if (opts.persist === false) document.documentElement.style.setProperty('--panel-opacity', String(n / 100));
+    else window.Theme.setPanelOpacity(n);
+  } else {
+    document.documentElement.style.setProperty('--panel-opacity', String(n / 100));
+    if (opts.persist !== false) {
+      try { localStorage.setItem(OPACITY_KEY, String(n)); } catch (_) { /* 忽略 */ }
+    }
+  }
+  const hint = $('#panelOpacityHint');
+  if (hint) hint.textContent = n + '%';
+  const range = $('#optPanelOpacity');
+  if (range && Number(range.value) !== n) range.value = String(n);
+  return n;
+}
+
+/* 减少动效：应用内开关，与系统偏好是「或」关系（双闸门） */
+function applyReduceMotion(on, options) {
+  const opts = options || {};
+  const want = !!on;
+  if (window.Theme && window.Theme.setReduceMotion) {
+    if (opts.persist === false) document.documentElement.classList.toggle('reduce-motion', want);
+    else window.Theme.setReduceMotion(want);
+  } else {
+    document.documentElement.classList.toggle('reduce-motion', want);
+    if (opts.persist !== false) {
+      try { localStorage.setItem(MOTION_KEY, want ? '1' : '0'); } catch (_) { /* 忽略 */ }
+    }
+  }
+  const cb = $('#optReduceMotion');
+  if (cb) cb.checked = want;
+  if (want) Motion.cancelAll();   // 关掉正在跑的转场，避免半截停住
+  return want;
+}
+
+/* 把当前偏好同步到设置面板的选中态与提示文案 */
+function syncSettingsUI() {
+  const pref = window.Theme ? window.Theme.get() : 'system';
+  $$('#segTheme .seg-item').forEach(b => b.classList.toggle('active', b.dataset.value === pref));
+  const hint = $('#themeHint');
+  if (hint) {
+    const actual = window.Theme ? window.Theme.current() : 'light';
+    hint.textContent = pref === 'system'
+      ? '跟随系统（当前' + (actual === 'light' ? '浅色' : '深色') + '）'
+      : '当前' + THEME_LABELS[pref];
+  }
+  const rm = $('#optReduceMotion');
+  if (rm) rm.checked = loadReduceMotion();
+  applyPanelOpacity(loadPanelOpacity(), { persist: false });
+  applyLayout();   // 同步布局卡片的选中态
+}
+
+function openSettings() {
+  syncSettingsUI();
+  /* 弹窗此刻才 display:flex，之前量到的 offsetWidth 都是 0，
+     所以背板必须在 openDialog 之后立刻 instant 落位 */
+  openDialog($('#settingsModal'));
+  placePill('#segTheme', true);
+}
+
+function closeSettings() {
+  closeDialog($('#settingsModal'));
+}
+
+/* 切换主题：light | dark | system，即时生效并持久化 */
+function setTheme(pref) {
+  if (!window.Theme) return;
+  window.Theme.set(pref);
+  syncSettingsUI();
+  placePill('#segTheme');
+  toast('主题已切换为' + THEME_LABELS[pref]);
+}
+
+/* 切换角色列表布局：list | grid | compact */
+function setLayout(mode) {
+  if (!LAYOUTS.includes(mode)) return;
+  if (mode === state.layout) { syncSettingsUI(); return; }
+  state.layout = mode;
+  saveLayout(mode);
+  renderList();
+  syncSettingsUI();
+}
+
 /* ---------------- 事件绑定 ---------------- */
 function bindEvents() {
   bindTabSwitching();
@@ -993,6 +1338,83 @@ function bindEvents() {
 
   // 侧边栏 角色/故事 视图切换
   $$('.side-tab').forEach(btn => btn.addEventListener('click', () => switchSideView(btn.dataset.view)));
+
+  // 设置：主题 + 布局 + 动效 + 通透度
+  $('#btnSettings').addEventListener('click', openSettings);
+  $('#settingsClose').addEventListener('click', closeSettings);
+  $('#settingsDone').addEventListener('click', closeSettings);
+  $('#settingsModal').addEventListener('click', e => { if (e.target === e.currentTarget) closeSettings(); });
+  $('#settingsReset').addEventListener('click', () => {
+    setTheme('system');
+    setLayout('list');
+    applyReduceMotion(false);
+    applyPanelOpacity(DEFAULT_OPACITY);
+    toast('已恢复默认设置');
+  });
+  $$('#segTheme .seg-item').forEach(b => b.addEventListener('click', () => setTheme(b.dataset.value)));
+  $$('#segLayout .layout-card').forEach(b => b.addEventListener('click', () => setLayout(b.dataset.value)));
+
+  $('#optReduceMotion').addEventListener('change', e => {
+    applyReduceMotion(e.target.checked);
+    toast(e.target.checked ? '已开启减少动效' : '已恢复完整动效');
+  });
+  const opacityRange = $('#optPanelOpacity');
+  // 拖动时实时改样式但不落盘，松手才写 localStorage（避免每像素一次写入）
+  opacityRange.addEventListener('input', e => applyPanelOpacity(e.target.value, { persist: false }));
+  opacityRange.addEventListener('change', e => applyPanelOpacity(e.target.value));
+
+  /* ---------------- 折叠区高度动画 ----------------
+   * <details> 关闭时会立刻移走内容，高度无法过渡；Chromium 130 也还不支持
+   * ::details-content。这里用「点击拦截 → 量高度 → animate → 结束再改 open」，
+   * prev ? !prev.opening : !details.open 这一句让「动画中途再点一次」
+   * 能从当前高度反向，而不是先跳回原位。
+   */
+  const foldMotions = new WeakMap();
+  // 曲线也只在 CSS 里定义一次（--e-fold），这里读出来用
+  const foldEase = getComputedStyle(document.documentElement)
+    .getPropertyValue('--e-fold').trim() || 'cubic-bezier(.22,.61,.36,1)';
+  document.addEventListener('click', e => {
+    const summary = e.target.closest('summary');
+    const details = summary && summary.parentElement;
+    if (!details || !details.classList.contains('fold')) return;
+    if (e.target.closest('button, a, input, select')) return;
+    if (Motion.reduced()) return;              // 降级：直接交给原生开关
+
+    e.preventDefault();
+    const prev = foldMotions.get(details);
+    const opening = prev ? !prev.opening : !details.open;
+    const from = details.getBoundingClientRect().height;
+
+    if (prev) prev.animation.cancel();
+    details.style.height = '';
+    details.open = opening;                    // 先按目标状态量最终高度
+    const to = details.getBoundingClientRect().height;
+    details.open = true;                       // 动画期间必须展开，否则内容不渲染
+    details.style.overflow = 'hidden';
+
+    const animation = details.animate(
+      [{ height: from + 'px' }, { height: to + 'px' }],
+      { duration: 220, easing: foldEase, fill: 'both' });
+    foldMotions.set(details, { animation, opening });
+    animation.onfinish = () => {
+      if (foldMotions.get(details) && foldMotions.get(details).animation !== animation) return;
+      details.open = opening;
+      animation.cancel();
+      details.style.height = '';
+      details.style.overflow = '';
+      foldMotions.delete(details);
+    };
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('#settingsModal').classList.contains('hidden')) closeSettings();
+  });
+  // 系统主题变化时刷新设置面板上的提示
+  if (window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if (window.Theme && window.Theme.get() === 'system') syncSettingsUI();
+    });
+  }
   $('#btnNewGlobalStory').addEventListener('click', () => openGlobalStoryEditor('create', null));
   $('#btnNewGlobalStory2').addEventListener('click', () => openGlobalStoryEditor('create', null));
 
@@ -1014,7 +1436,11 @@ function bindEvents() {
   });
 
   // 独立故事详情视图
-  $('#btnGSBack').addEventListener('click', () => switchSideView('chars'));
+  // 「返回角色」：若当前在故事库视图，侧栏与详情一起返回；否则只翻回角色详情页
+  $('#btnGSBack').addEventListener('click', () => {
+    if (state.view !== 'chars') switchSideView('chars');
+    else setDetailPane('detail');
+  });
   $('#btnGSEdit').addEventListener('click', () => {
     const s = state.globalStoryCache;
     if (s) openGlobalStoryEditor('edit', s);
@@ -1150,6 +1576,9 @@ function bindEvents() {
 
 /* ---------------- 启动 ---------------- */
 document.addEventListener('DOMContentLoaded', () => {
+  state.layout = loadLayout();   // 恢复上次选择的列表 / 网格 / 紧凑布局
   bindEvents();
+  syncSettingsUI();              // 同时应用布局、动效、通透度与设置面板选中态
+  placePill('#sideTabs', true);  // 首屏背板落位（此时才是真实宽度，且不该滑动）
   loadCharacters();
 });
